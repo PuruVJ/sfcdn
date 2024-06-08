@@ -1,9 +1,11 @@
 import { $ } from 'bun';
 import { Elysia } from 'elysia';
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { format } from 'prettier';
 import * as resolve from 'resolve.exports';
 import type { PackageJson } from 'type-fest';
+import compilers from './scripts/localcache/svelte';
 
 async function fetch_package_info(name: string, version = 'latest') {
 	const url = `https://registry.npmjs.org/${name}/${version}`;
@@ -12,7 +14,7 @@ async function fetch_package_info(name: string, version = 'latest') {
 	return (await res.json()) as PackageJson;
 }
 
-const package_regex = /^([\w-]+)?(?:@([\w.-]+))?\/?([\w-]+|[\w./-]+)?$/;
+const package_regex = /^(@[\w-]+\/[\w-]+|[\w-]+)?(?:@([\w.-]+))?\/?([\w-]+|[\w./-]+)?$/;
 
 const FETCH_CACHE: Map<string, Promise<{ url: string; body: string }>> = new Map();
 
@@ -49,8 +51,8 @@ const FETCH_CACHE: Map<string, Promise<{ url: string; body: string }>> = new Map
 async function resolve_from_pkg(
 	pkg_name: string,
 	pkg: PackageJson,
-	subpath: string
-	// pkg_url_base: string
+	subpath: string,
+	pkg_url_base: string
 ) {
 	// match legacy Rollup logic — pkg.svelte takes priority over pkg.exports
 	if (typeof pkg.svelte === 'string' && subpath === '.') {
@@ -93,9 +95,9 @@ async function resolve_from_pkg(
 			// last ditch — try to match index.js/index.mjs
 			for (const index_file of ['index.mjs', 'index.js']) {
 				try {
-					// const indexUrl = new URL(index_file, `${pkg_url_base}/`).href;
-					throw new Error('UNHANDLED');
-					// return (await follow_redirects(indexUrl)) ?? '';
+					const indexUrl = path.join(pkg_url_base, index_file);
+					await stat(indexUrl);
+					return indexUrl.replace(pkg_url_base, '');
 				} catch {
 					// maybe the next option will be successful
 				}
@@ -119,10 +121,10 @@ async function resolve_from_pkg(
 
 new Elysia()
 	.get('/', ({}) => 'Hello')
-	.get('/npm/*', async ({ params }) => {
+	.get('/npm/*', async ({ params, query }) => {
 		const slug = params['*'];
 
-		const [, name, version = 'latest', export_or_file = ''] = package_regex.exec(slug);
+		const [, name, version = 'latest', export_or_file = '.'] = package_regex.exec(slug);
 
 		const package_json = await fetch_package_info(name, version);
 
@@ -146,11 +148,42 @@ new Elysia()
 
 		// Now resolve the file
 		// We'll try to keep it as an export first.
-		const resolved = String(await resolve_from_pkg(name, package_json, export_or_file));
+		const resolved = String(
+			await resolve_from_pkg(
+				name,
+				package_json,
+				export_or_file,
+				path.join(folder, 'node_modules', name)
+			)
+		);
+		console.log(resolved);
 
 		const full_path = path.join(folder, 'node_modules', name, resolved);
 
-		return await readFile(full_path, 'utf8');
+		const content = await readFile(full_path, 'utf8');
+
+		let output = content;
+
+		if (full_path.endsWith('.svelte')) {
+			try {
+				// Fetch full version query.svelt
+
+				console.log(version);
+				const compile = await compilers.get(query.svelte || 'latest')();
+
+				const { js } = await compile(content, {
+					name: 'App',
+					filename: full_path,
+				});
+
+				output = js.code;
+			} catch (e) {
+				console.error(e);
+			}
+		}
+
+		// Now go through all the imports and resolve them
+		return output;
 	})
 	.listen(1234, ({ port }) => console.log('Listening on http://localhost:' + port));
 

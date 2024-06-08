@@ -31,7 +31,7 @@ if (true) {
 			// Write package.json with svelte version as dependency
 			await $`echo '{ "dependencies": { "svelte": "${v}" } }' > ${folder + '/' + v}/package.json`;
 			// Write an index.js file which export compile function from svelte/compiler
-			await $`echo 'export {compile} from "svelte/compiler";' > ${folder + '/' + v}/index.js`;
+			await $`echo ${v.startsWith('4') ? 'const { compile } = require("svelte/compiler");\n\nmodule.exports = { compile }' : 'export {compile} from "svelte/compiler";'} > ${folder + '/' + v}/index.js`;
 		}
 	} catch {}
 
@@ -57,6 +57,7 @@ if (false) {
 				format: 'esm',
 				outDir: folder + '/' + version,
 				treeshake: 'smallest',
+				pure: ['compile'],
 				bundle: true,
 				noExternal: ['svelte/compiler'],
 			});
@@ -81,11 +82,14 @@ if (false) {
 //   .join(',\n')}};' > ${folder}/index.js`;
 
 const content =
-	'export default {\n' +
+	'export default new Map([\n' +
 	versions
-		.map((v) => `  "${v}": () => import('./${v}/index.mjs').then(r => r.compile())`)
+		.map(
+			(v) =>
+				`  ["${v}", () => import('./${v}/index.mjs').then(r => ${v.startsWith('4') ? 'r.default.compile' : 'r.compile'})]`
+		)
 		.join(',\n') +
-	'\n};';
+	'\n]);';
 
 await writeFile(folder + '/index.js', content);
 

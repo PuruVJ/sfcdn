@@ -3,6 +3,7 @@
 	"dependencies": {
 		"@pnpm/core": "^14.1.9",
 		"elysia": "^1.0.22",
+		"prettier": "^3.3.1",
 		"resolve.exports": "^2.0.2",
 		"svelte": "3.0.0-alpha6",
 		"tsup": "^8.1.0",
