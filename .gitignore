@@ -1,0 +1,4 @@
+.DS_Store
+src/**/localcache
+node_modules
+/packages
