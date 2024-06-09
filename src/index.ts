@@ -19,37 +19,7 @@ async function fetch_package_info(name: string, version = 'latest') {
 
 const package_regex = /^(@[\w-]+\/[\w-]+|[\w-]+)?(?:@([\w.-]+))?\/?([\w-]+|[\w./-]+)?$/;
 
-const FETCH_CACHE: Map<string, Promise<{ url: string; body: string }>> = new Map();
-
-// async function fetch_if_uncached(url: string) {
-// 	if (FETCH_CACHE.has(url)) {
-// 		return FETCH_CACHE.get(url);
-// 	}
-
-// 	// if (uid !== current_id) throw ABORT;
-
-// 	const promise = fetch(url)
-// 		.then(async (r) => {
-// 			if (!r.ok) throw new Error(await r.text());
-
-// 			return {
-// 				url: r.url,
-// 				body: await r.text(),
-// 			};
-// 		})
-// 		.catch((err) => {
-// 			FETCH_CACHE.delete(url);
-// 			throw err;
-// 		});
-
-// 	FETCH_CACHE.set(url, promise);
-// 	return promise;
-// }
-
-// async function follow_redirects(url: string) {
-// 	const res = await fetch_if_uncached(url);
-// 	return res?.url;
-// }
+const BUILD_VERSION = 1;
 
 async function resolve_from_pkg(pkg: PackageJson, subpath: string, pkg_url_base: string) {
 	// match legacy Rollup logic — pkg.svelte takes priority over pkg.exports
@@ -72,8 +42,6 @@ async function resolve_from_pkg(pkg: PackageJson, subpath: string, pkg_url_base:
 		}
 	}
 
-	// console.log(pkg_url_base, subpath);
-
 	// legacy
 	if (subpath === '.') {
 		let resolved_id = resolve.legacy(pkg, {
@@ -95,18 +63,14 @@ async function resolve_from_pkg(pkg: PackageJson, subpath: string, pkg_url_base:
 	}
 
 	// last ditch — try to match index.js/index.mjs
-	for (const index_file of ['', '.mjs', '.js', 'index.mjs', 'index.js']) {
-		const joined = path.join(pkg_url_base, subpath);
+	for (const index_file of ['', '.mjs', '.js', '/index.mjs', '/index.js']) {
+		const joined = path.join(pkg_url_base, subpath) + index_file;
 		try {
-			const indexUrl =
-				index_file === ''
-					? joined
-					: index_file.startsWith('.')
-						? joined.replace(/\/$/, '') + index_file
-						: path.join(joined, index_file);
+			const indexUrl = joined;
 
 			console.log({ indexUrl });
-			await stat(indexUrl);
+			const info = await stat(indexUrl);
+			if (info.isDirectory()) throw new Error('Is a directory');
 			console.log(1);
 
 			return '.' + indexUrl.replace(pkg_url_base, '');
@@ -199,17 +163,21 @@ new Elysia()
 
 		const transformed = walk(ast as Node, state, {
 			ImportExpression(node, { state, next }) {
-				state.importedModules.set(node.source.value + '', [
-					(node.source as Node).start,
-					(node.source as Node).end,
+				if ((node.source as any).value.startsWith('.')) next();
+
+				state.importedModules.set((node.source as any).value + '', [
+					(node.source as any).start,
+					(node.source as any).end,
 				]);
 
 				next();
 			},
 			ImportDeclaration(node, { state, next }) {
+				console.log(node.source.value, node.source.value.toString().startsWith('.'));
+				if (String(node.source.value).startsWith('.')) return next();
 				state.importedModules.set(node.source.value + '', [
-					(node.source as Node).start,
-					(node.source as Node).end,
+					(node.source as any).start,
+					(node.source as any).end,
 				]);
 
 				next();
