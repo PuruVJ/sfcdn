@@ -11,9 +11,15 @@ importers:
       '@pnpm/core':
         specifier: ^14.1.9
         version: 14.1.9(@pnpm/logger@5.0.0)(@pnpm/worker@1.0.3(@pnpm/logger@5.0.0)(@types/node@20.14.2))(@types/node@20.14.2)(@yarnpkg/core@4.0.5(typanion@3.14.0))(typanion@3.14.0)
+      acorn:
+        specifier: ^8.11.3
+        version: 8.11.3
       elysia:
         specifier: ^1.0.22
         version: 1.0.22(@sinclair/typebox@0.32.31)(typescript@5.4.5)
+      estree-walker:
+        specifier: ^3.0.3
+        version: 3.0.3
       prettier:
         specifier: ^3.3.1
         version: 3.3.1
@@ -35,6 +41,9 @@ importers:
       ulid:
         specifier: ^2.3.0
         version: 2.3.0
+      zimmerframe:
+        specifier: ^1.1.2
+        version: 1.1.2
     devDependencies:
       '@types/node':
         specifier: ^20.14.2
@@ -923,6 +932,11 @@ packages:
     resolution: {integrity: sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ==}
     engines: {node: ^14.17.0 || ^16.13.0 || >=18.0.0}
 
+  acorn@8.11.3:
+    resolution: {integrity: sha512-Y9rRfJG5jcKOE0CLisYbojUjIrIEE7AGMzA/Sm4BslANhbS+cDMpgBdcPT91oJ7OuJ9hYJBx59RjbhxVnrF8Xg==}
+    engines: {node: '>=0.4.0'}
+    hasBin: true
+
   agent-base@6.0.2:
     resolution: {integrity: sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ==}
     engines: {node: '>= 6.0.0'}
@@ -1230,6 +1244,9 @@ packages:
     resolution: {integrity: sha512-eGuFFw7Upda+g4p+QHvnW0RyTX/SVeJBDM/gCtMARO0cLuT2HcEKnTPvhjV6aGeqrCB/sbNop0Kszm0jsaWU4A==}
     engines: {node: '>=4'}
     hasBin: true
+
+  estree-walker@3.0.3:
+    resolution: {integrity: sha512-7RUKfXgSMMkzt6ZuXmqapOurLGPPfgj6l9uRZ7lRGolvk0y2yocc35LdcxKC5PQZdn2DMqioAQ2NoWcrTKmm6g==}
 
   eventemitter3@4.0.7:
     resolution: {integrity: sha512-8guHBZCwKnFhYdHr2ysuRWErTwhoN2X8XELRlrRwpmfeY2jjuUN4taQMsULKUVo1K4DvZl+0pgfyoysHxvmvEw==}
@@ -2421,6 +2438,9 @@ packages:
   yocto-queue@0.1.0:
     resolution: {integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==}
     engines: {node: '>=10'}
+
+  zimmerframe@1.1.2:
+    resolution: {integrity: sha512-rAbqEGa8ovJy4pyBxZM70hg4pE6gDgaQ0Sl9M3enG3I0d6H4XSAM3GeNGLKnsBpuijUow064sf7ww1nutC5/3w==}
 
 snapshots:
 
@@ -3731,6 +3751,8 @@ snapshots:
 
   abbrev@2.0.0: {}
 
+  acorn@8.11.3: {}
+
   agent-base@6.0.2:
     dependencies:
       debug: 4.3.5
@@ -4040,6 +4062,10 @@ snapshots:
   escape-string-regexp@4.0.0: {}
 
   esprima@4.0.1: {}
+
+  estree-walker@3.0.3:
+    dependencies:
+      '@types/estree': 1.0.5
 
   eventemitter3@4.0.7: {}
 
@@ -5178,3 +5204,5 @@ snapshots:
   yaml@2.4.3: {}
 
   yocto-queue@0.1.0: {}
+
+  zimmerframe@1.1.2: {}

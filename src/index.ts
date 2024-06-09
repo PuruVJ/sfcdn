@@ -1,10 +1,13 @@
+import { parse } from 'acorn';
 import { $ } from 'bun';
-import { Elysia } from 'elysia';
+import { Elysia, redirect } from 'elysia';
+import { type Node } from 'estree-walker';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { format } from 'prettier';
 import * as resolve from 'resolve.exports';
 import type { PackageJson } from 'type-fest';
+import { walk } from 'zimmerframe';
 import compilers from './scripts/localcache/svelte';
 
 async function fetch_package_info(name: string, version = 'latest') {
@@ -48,12 +51,7 @@ const FETCH_CACHE: Map<string, Promise<{ url: string; body: string }>> = new Map
 // 	return res?.url;
 // }
 
-async function resolve_from_pkg(
-	pkg_name: string,
-	pkg: PackageJson,
-	subpath: string,
-	pkg_url_base: string
-) {
+async function resolve_from_pkg(pkg: PackageJson, subpath: string, pkg_url_base: string) {
 	// match legacy Rollup logic — pkg.svelte takes priority over pkg.exports
 	if (typeof pkg.svelte === 'string' && subpath === '.') {
 		return pkg.svelte;
@@ -70,9 +68,11 @@ async function resolve_from_pkg(
 
 			return resolved;
 		} catch {
-			throw `no matched export path was found in "${pkg_name}/package.json"`;
+			// throw `no matched export path was found in "${pkg_name}/package.json"`;
 		}
 	}
+
+	// console.log(pkg_url_base, subpath);
 
 	// legacy
 	if (subpath === '.') {
@@ -91,22 +91,26 @@ async function resolve_from_pkg(
 				});
 		}
 
-		if (!resolved_id) {
-			// last ditch — try to match index.js/index.mjs
-			for (const index_file of ['index.mjs', 'index.js']) {
-				try {
-					const indexUrl = path.join(pkg_url_base, index_file);
-					await stat(indexUrl);
-					return indexUrl.replace(pkg_url_base, '');
-				} catch {
-					// maybe the next option will be successful
-				}
-			}
-
-			throw `could not find entry point in "${pkg_name}/package.json"`;
-		}
-
 		return resolved_id;
+	}
+
+	// last ditch — try to match index.js/index.mjs
+	for (const index_file of ['', '.mjs', '.js', 'index.mjs', 'index.js']) {
+		const joined = path.join(pkg_url_base, subpath);
+		try {
+			const indexUrl =
+				index_file === ''
+					? joined
+					: index_file.startsWith('.')
+						? joined.replace(/\/$/, '') + index_file
+						: path.join(joined, index_file);
+
+			console.log({ indexUrl });
+			await stat(indexUrl);
+			console.log(1);
+
+			return '.' + indexUrl.replace(pkg_url_base, '');
+		} catch {}
 	}
 
 	if (typeof pkg.browser === 'object') {
@@ -121,7 +125,7 @@ async function resolve_from_pkg(
 
 new Elysia()
 	.get('/', ({}) => 'Hello')
-	.get('/npm/*', async ({ params, query }) => {
+	.get('/npm/*', async ({ params, query, request }) => {
 		const slug = params['*'];
 
 		const [, name, version = 'latest', export_or_file = '.'] = package_regex.exec(slug);
@@ -149,14 +153,16 @@ new Elysia()
 		// Now resolve the file
 		// We'll try to keep it as an export first.
 		const resolved = String(
-			await resolve_from_pkg(
-				name,
-				package_json,
-				export_or_file,
-				path.join(folder, 'node_modules', name)
-			)
+			await resolve_from_pkg(package_json, export_or_file, path.join(folder, 'node_modules', name))
 		);
-		console.log(resolved);
+		const url = new URL(request.url);
+
+		if (!/\.(js|svelte)$/.test(url.pathname)) {
+			const new_pathname = path.resolve(url.pathname.replace(export_or_file, ''), resolved);
+			console.log({ new_pathname, resolved });
+
+			return redirect(new_pathname + url.search, 307);
+		}
 
 		const full_path = path.join(folder, 'node_modules', name, resolved);
 
@@ -166,14 +172,17 @@ new Elysia()
 
 		if (full_path.endsWith('.svelte')) {
 			try {
-				// Fetch full version query.svelt
+				// Fetch full version query.svelte
 
 				console.log(version);
-				const compile = await compilers.get(query.svelte || 'latest')();
+				const compile = (await compilers.get(
+					query.svelte || '4.0.0'
+				)()) as import('svelte/compiler');
 
 				const { js } = await compile(content, {
 					name: 'App',
 					filename: full_path,
+					// dev: true,
 				});
 
 				output = js.code;
@@ -182,8 +191,35 @@ new Elysia()
 			}
 		}
 
+		const ast = parse(output, { ecmaVersion: 2020, sourceType: 'module' });
+
+		const state = {
+			importedModules: new Map<string, [number, number]>(),
+		};
+
+		const transformed = walk(ast as Node, state, {
+			ImportExpression(node, { state, next }) {
+				state.importedModules.set(node.source.value + '', [
+					(node.source as Node).start,
+					(node.source as Node).end,
+				]);
+
+				next();
+			},
+			ImportDeclaration(node, { state, next }) {
+				state.importedModules.set(node.source.value + '', [
+					(node.source as Node).start,
+					(node.source as Node).end,
+				]);
+
+				next();
+			},
+		});
+
+		console.log(state);
+
 		// Now go through all the imports and resolve them
-		return output;
+		return await format(output, { filepath: 'x.js', useTabs: true, singleQuote: true });
 	})
 	.listen(1234, ({ port }) => console.log('Listening on http://localhost:' + port));
 

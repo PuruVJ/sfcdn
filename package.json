@@ -2,14 +2,17 @@
 	"name": "sfcdn",
 	"dependencies": {
 		"@pnpm/core": "^14.1.9",
+		"acorn": "^8.11.3",
 		"elysia": "^1.0.22",
+		"estree-walker": "^3.0.3",
 		"prettier": "^3.3.1",
 		"resolve.exports": "^2.0.2",
 		"svelte": "3.0.0-alpha6",
 		"tsup": "^8.1.0",
 		"type-fest": "^4.19.0",
 		"typescript": "^5.4.5",
-		"ulid": "^2.3.0"
+		"ulid": "^2.3.0",
+		"zimmerframe": "^1.1.2"
 	},
 	"devDependencies": {
 		"@types/node": "^20.14.2",
