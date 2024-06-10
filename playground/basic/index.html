@@ -1,7 +1,11 @@
 <div></div>
 
 <script type="module">
-	import { ConfettiExplosion } from 'http://localhost:1234/npm/svelte-confetti-explosion';
+	// import { mount } from 'https://localhost:1234/npm/svelte@next';
+	import { ConfettiExplosion } from 'https://localhost:1234/npm/svelte-confetti-explosion';
 
-	new ConfettiExplosion({ target: document.querySelector('div') });
+	// const res = mount(ConfettiExplosion, { target: document.querySelector('div') });
+	const res = new ConfettiExplosion({ target: document.querySelector('div') });
+
+	console.log(res);
 </script>

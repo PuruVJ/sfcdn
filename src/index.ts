@@ -1,9 +1,10 @@
 import { cors } from '@elysiajs/cors';
-import { parse } from 'acorn';
+import { parse, type Literal } from 'acorn';
 import { $ } from 'bun';
 import { Database } from 'bun:sqlite';
 import { Elysia, redirect } from 'elysia';
 import { type Node } from 'estree-walker';
+import MagicString from 'magic-string';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import * as pacote from 'pacote';
@@ -12,9 +13,10 @@ import * as resolve from 'resolve.exports';
 import type { PackageJson } from 'type-fest';
 import { walk } from 'zimmerframe';
 import compilers from './scripts/localcache/svelte';
-import MagicString from 'magic-string';
 
 const db = new Database('db.sqlite');
+
+const PACKAGES_ROOT = './packages';
 
 class Cache {
 	get(key: string) {
@@ -45,9 +47,9 @@ async function fetch_package_info(name: string, version?: string) {
 }
 
 const URL_REGEX =
-	/^(\/?(?<registry>npm|github)\/)?(?<name>(?:@[\w-]+\/)?[\w-]+)(?:@(?<version>\d+\.\d+\.?\d*|[\w.-]+))?(\/?(?<extra>[\w./-]+)?)$/;
+	/^(\/?(?<registry>npm|github)\/)?(?<name>(?:@[\w-]+\/)?[\w-]+)(?:@(?<version>[\w.-]+))?(\/?(?<extra>[\w./-]+)?)$/;
 const PROCESSED_URL_REGEX =
-	/^\/(?<registry>npm|github)\/(?<name>(?:@[\w-]+\/)?[\w-]+)@(?<version>\d+\.\d+\.\d+|[\w.-]+)\/(?<extra>[\w./-]+)!!cdnv:.*$/;
+	/^\/(?<registry>npm|github)\/(?<name>(?:@[\w-]+\/)?[\w-]+)@(?<version>\d+\.\d+\.\d+(?:-[\w.-]+)?)\/(?<extra>[\w./-]+)!!cdnv:.*$/;
 
 const BUILD_VERSION = 'pre.1';
 
@@ -60,19 +62,20 @@ const flag_aliases = {
 
 async function resolve_config_from_url(url: URL) {
 	// First check whether its already processed to the format we like. Should be starting with !!cdnv:something at the very end
-	const processed = PROCESSED_URL_REGEX.exec(url.pathname);
+	const already_processed = PROCESSED_URL_REGEX.exec(url.pathname);
 
 	let registry: string, name: string, semversion: string, export_or_file: string;
 	let flags = {} as Partial<Record<(typeof reserved_flags)[number], string>>;
 
-	if (processed) {
+	if (already_processed) {
+		console.log(1);
 		// All the info is the url. Get it!
 		({
 			registry = 'npm',
 			name,
 			version: semversion = 'latest',
 			extra: export_or_file = '.',
-		} = processed.groups ?? {});
+		} = already_processed.groups ?? {});
 
 		// Also get the options
 		const flags_arr = url.pathname.split('!!')[1].split(';');
@@ -105,11 +108,12 @@ async function resolve_config_from_url(url: URL) {
 		} = URL_REGEX.exec(url.pathname)?.groups ?? {});
 
 		// For svelte options
-		const svelte_flag = url.searchParams.get('svelte') || '4';
+		const svelte_flag = url.searchParams.get('svelte');
 
-		if (url.pathname.endsWith('.svelte')) {
+		if (url.pathname.endsWith('.svelte') || svelte_flag) {
 			// The versin could be anything from 2 to 3.1 to 4.0.0 to 5 to next. Resolve it how npm install does
-			const { version } = await pacote.manifest(`svelte@${svelte_flag}`);
+			console.log([svelte_flag]);
+			const { version } = await pacote.manifest(`svelte@${svelte_flag || '4'}`);
 			flags.svelte = version;
 		}
 	}
@@ -125,12 +129,12 @@ async function resolve_config_from_url(url: URL) {
 		}
 	}
 
+	console.log({ name, semversion });
 	const { version } = await pacote.manifest(`${name}@${semversion}`);
 	const package_json = await fetch_package_info(name, version);
 
-	const cwd = './packages';
 	const proj_id = `${package_json.name}@${package_json.version}`;
-	const folder = `${cwd}/${proj_id}`;
+	const folder = `${PACKAGES_ROOT}/${proj_id}`;
 
 	try {
 		await mkdir(folder, { recursive: true });
@@ -146,6 +150,7 @@ async function resolve_config_from_url(url: URL) {
 		version,
 		subpath,
 		url,
+		package_json,
 		folder,
 		proj_id,
 		flags,
@@ -242,7 +247,7 @@ async function resolve_from_pkg(pkg: PackageJson, subpath: string, pkg_url_base:
 	return subpath;
 }
 
-new Elysia()
+const app = new Elysia()
 	.use(cors())
 	.get('/', ({}) => 'Hello')
 	.get('/favicon.ico', ({ set }) => (set.status = 204))
@@ -250,14 +255,17 @@ new Elysia()
 		const config = await resolve_config_from_url(new URL(request.url));
 		const resolved_url = await stringify_url_from_config(config);
 
+		console.log(config.flags);
+
 		const hit = cache.get(resolved_url.pathname);
 
-		// if (hit) {
-		// 	set.headers['Content-Type'] = 'application/javascript';
-		// 	set.headers['Content-Encoding'] = 'gzip';
-		// 	console.info('CACHE HIT:', resolved_url.pathname);
-		// 	return Bun.gzipSync(hit);
-		// }
+		if (hit) {
+			set.headers['Content-Type'] = 'application/javascript';
+			set.headers['Content-Encoding'] = 'gzip';
+			// set.headers['Cache-Control'] = 'public, max-age=31536000, immutable';
+			console.info('CACHE HIT:', resolved_url.pathname);
+			return Bun.gzipSync(hit);
+		}
 
 		const folder_contents = await readdir(config.folder);
 		if (!folder_contents.includes('pnpm-lock.yaml')) {
@@ -288,7 +296,7 @@ new Elysia()
 				const { js } = compile(content, {
 					name: 'App',
 					filename: full_path,
-					// dev: true,
+					dev: false,
 				});
 
 				output = js.code;
@@ -296,14 +304,15 @@ new Elysia()
 				console.error(e);
 			}
 		}
+
 		try {
-			const ast = parse(output, { ecmaVersion: 2020, sourceType: 'module' });
+			const ast = parse(output, { ecmaVersion: 2022, sourceType: 'module' });
 
 			const state = {
-				imports_exports: new Map<string, [number, number]>(),
+				imports_exports: new Map<string, Set<[number, number]>>(),
 			};
 
-			const transformed = walk(ast as Node, state, {
+			walk(ast as Node, state, {
 				_(node, { state, next }) {
 					const node_types: (typeof node)['type'][] = [
 						'ImportExpression',
@@ -318,10 +327,17 @@ new Elysia()
 					}
 
 					if ('source' in node && node.source != null && 'value' in node.source) {
-						state.imports_exports.set((node.source as any).value + '', [
-							(node.source as any).start,
-							(node.source as any).end,
-						]);
+						const typed_node_source = node.source as Literal;
+						if (state.imports_exports.has(typed_node_source.value + '')) {
+							state.imports_exports
+								.get(typed_node_source.value + '')
+								?.add([typed_node_source.start, typed_node_source.end]);
+						} else {
+							state.imports_exports.set(typed_node_source.value + '', new Set());
+							state.imports_exports
+								.get(typed_node_source.value + '')
+								?.add([typed_node_source.start, typed_node_source.end]);
+						}
 					}
 
 					next(state);
@@ -329,34 +345,107 @@ new Elysia()
 			});
 
 			const ms = new MagicString(output);
-			for (const [import_path, [start, end]] of state.imports_exports) {
+
+			// console.log(state.imports_exports);
+
+			for (const [import_path, locs] of state.imports_exports) {
 				let final_path = path.join('/npm/', import_path);
 				if (import_path.startsWith('.')) {
+					console.log('Relative import:', import_path);
 					// Resolve with pathname
 					const resolved = new URL(import_path, config.url);
-					final_path = resolved.pathname;
+					if (config.flags.svelte) {
+						resolved.searchParams.set('svelte', config.flags.svelte);
+					}
+
+					final_path = (await stringify_url_from_config(await resolve_config_from_url(resolved)))
+						.pathname;
+					console.log({ final_path });
+				} else {
+					// We also need to point the dependency to the version in the package.json of the current package
+					config.package_json.dependencies ??= {};
+					config.package_json.devDependencies ??= {};
+					config.package_json.peerDependencies ??= {};
+
+					const [name] = /(?:@[^/]+\/)?[^/]+/.exec(import_path) ?? [];
+					if (!name) throw new Error('Could not extract name from import path ' + import_path);
+
+					let version =
+						config.package_json.dependencies[name] ??
+						config.package_json.devDependencies[name] ??
+						config.package_json.peerDependencies[name] ??
+						'latest';
+
+					if (config.flags.svelte && name === 'svelte') {
+						version = config.flags.svelte;
+					}
+
+					const { version: resolved_version } = await pacote.manifest(`${name}@${version}`);
+					const package_json = await fetch_package_info(name, resolved_version);
+
+					final_path = String(
+						await resolve_from_pkg(
+							package_json,
+							final_path.replace(`/npm/${name}`, '').replace(/^\//, ''),
+							path.join(config.folder, 'node_modules', name)
+						)
+					);
+
+					final_path = path.join('/npm/', name + '@' + resolved_version, final_path);
+
+					const folder = `${PACKAGES_ROOT}/${name}@${resolved_version}`;
+
+					try {
+						await mkdir(folder, { recursive: true });
+					} catch {}
+
+					await writeFile(
+						`${folder}/package.json`,
+						JSON.stringify({ dependencies: { [name]: version } }, null, 2)
+					);
+
+					await $`cd ${folder} && pnpm install --prefer-offline --ignore-scripts`;
+
+					// console.log(new URL(final_path, config.url.origin));
+					final_path = (
+						await stringify_url_from_config(
+							await resolve_config_from_url(new URL(final_path, config.url.origin))
+						)
+					).pathname;
+					// console.log(final_path);}
 				}
 
-				// We also need to point the dependency to the version in the package.json of the current package
-
-				ms.overwrite(start, end, `'${final_path}'`);
+				for (const [start, end] of locs) {
+					ms.overwrite(start, end, `'${final_path}'`);
+				}
 			}
 
-			console.log(1);
 			output = ms.toString();
-			console.log(2);
 
 			console.log(state);
 		} catch (e) {
-			console.error(e);
+			console.trace(e);
 		}
 
+		output = await format(output, { filepath: 'x.js', useTabs: true, singleQuote: true });
 		cache.set(resolved_url.pathname, output);
 
 		set.headers['Content-Type'] = 'application/javascript';
 		set.headers['Content-Encoding'] = 'gzip';
+		// set.headers['Cache-Control'] = 'public, max-age=31536000, immutable';
 
-		output = await format(output, { filepath: 'x.js', useTabs: true, singleQuote: true });
 		return Bun.gzipSync(output);
-	})
-	.listen(1234, ({ port }) => console.log('Listening on http://localhost:' + port));
+	});
+// .listen(1234, ({ port }) => console.log('Listening on http://localhost:' + port));
+
+Bun.serve({
+	port: 1234,
+	fetch(request) {
+		return app.handle(request);
+	},
+	tls: {
+		key: Bun.file('./certs/myCA.key'),
+		cert: Bun.file('./certs/myCA.pem'),
+		passphrase: '123456789',
+	},
+});
