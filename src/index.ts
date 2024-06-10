@@ -12,6 +12,7 @@ import * as resolve from 'resolve.exports';
 import type { PackageJson } from 'type-fest';
 import { walk } from 'zimmerframe';
 import compilers from './scripts/localcache/svelte';
+import MagicString from 'magic-string';
 
 const db = new Database('db.sqlite');
 
@@ -210,10 +211,8 @@ async function resolve_from_pkg(pkg: PackageJson, subpath: string, pkg_url_base:
 		try {
 			const indexUrl = joined;
 
-			console.log({ indexUrl });
 			const info = await stat(indexUrl);
 			if (info.isDirectory()) throw new Error('Is a directory');
-			console.log(1);
 
 			return '.' + indexUrl.replace(pkg_url_base, '');
 		} catch {}
@@ -239,7 +238,7 @@ new Elysia()
 
 		const hit = cache.get(resolved_url.pathname);
 
-		if (hit) {
+		if (hit && true) {
 			set.headers['Content-Type'] = 'application/javascript';
 			console.info('CACHE HIT:', resolved_url.pathname);
 			return hit;
@@ -288,31 +287,49 @@ new Elysia()
 			const ast = parse(output, { ecmaVersion: 2020, sourceType: 'module' });
 
 			const state = {
-				external_modules: new Map<string, [number, number]>(),
+				imports_exports: new Map<string, [number, number]>(),
 			};
 
 			const transformed = walk(ast as Node, state, {
-				ImportExpression(node, { state, next }) {
-					if ((node.source as any).value.startsWith('.')) next();
+				_(node, { state, next }) {
+					const node_types: (typeof node)['type'][] = [
+						'ImportExpression',
+						'ImportDeclaration',
+						'ExportNamedDeclaration',
+						'ExportAllDeclaration',
+						'ExportDefaultDeclaration',
+					];
 
-					state.external_modules.set((node.source as any).value + '', [
-						(node.source as any).start,
-						(node.source as any).end,
-					]);
+					if (!node_types.includes(node.type)) {
+						return next(state);
+					}
 
-					next();
-				},
-				ImportDeclaration(node, { state, next }) {
-					console.log(node.source.value, node.source.value?.toString().startsWith('.'));
-					if (String(node.source.value).startsWith('.')) return next();
-					state.external_modules.set(node.source.value + '', [
-						(node.source as any).start,
-						(node.source as any).end,
-					]);
+					if ('source' in node && node.source != null && 'value' in node.source) {
+						state.imports_exports.set((node.source as any).value + '', [
+							(node.source as any).start,
+							(node.source as any).end,
+						]);
+					}
 
-					next();
+					next(state);
 				},
 			});
+
+			const ms = new MagicString(output);
+			for (const [import_path, [start, end]] of state.imports_exports) {
+				let final_path = path.join('/npm/', import_path);
+				if (import_path.startsWith('.')) {
+					// Resolve with pathname
+					const resolved = new URL(import_path, config.url);
+					final_path = resolved.pathname;
+				}
+
+				ms.overwrite(start, end, `'http://localhost:1234${final_path}'`);
+			}
+
+			console.log(1);
+			output = ms.toString();
+			console.log(2);
 
 			console.log(state);
 		} catch (e) {
@@ -323,6 +340,7 @@ new Elysia()
 
 		set.headers['Content-Type'] = 'application/javascript';
 		// Now go through all the imports and resolve them
-		return await format(output, { filepath: 'x.js', useTabs: true, singleQuote: true });
+		// return await format(output, { filepath: 'x.js', useTabs: true, singleQuote: true });
+		return output;
 	})
 	.listen(1234, ({ port }) => console.log('Listening on http://localhost:' + port));

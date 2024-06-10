@@ -6,6 +6,7 @@
 		"acorn": "^8.11.3",
 		"elysia": "^1.0.22",
 		"estree-walker": "^3.0.3",
+		"magic-string": "^0.30.10",
 		"pacote": "^18.0.6",
 		"prettier": "^3.3.1",
 		"resolve.exports": "^2.0.2",
