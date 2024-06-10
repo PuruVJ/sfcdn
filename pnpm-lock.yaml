@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@elysiajs/cors':
+        specifier: ^1.0.2
+        version: 1.0.2(elysia@1.0.22(@sinclair/typebox@0.32.31)(typescript@5.4.5))
       '@pnpm/core':
         specifier: ^14.1.9
         version: 14.1.9(@pnpm/logger@5.0.0)(@pnpm/worker@1.0.3(@pnpm/logger@5.0.0)(@types/node@20.14.2))(@types/node@20.14.2)(@yarnpkg/core@4.0.5(typanion@3.14.0))(typanion@3.14.0)
@@ -78,6 +81,11 @@ packages:
   '@babel/highlight@7.24.7':
     resolution: {integrity: sha512-EStJpq4OuY8xYfhGVXngigBJRWxftKX9ksiGDnmlY3o7B/V7KIAc9X4oiK87uPJSc/vs5L869bem5fhZa8caZw==}
     engines: {node: '>=6.9.0'}
+
+  '@elysiajs/cors@1.0.2':
+    resolution: {integrity: sha512-2X+wes5M2SdSaI4lGp0YBbTK35y9TtjjjFMjmQNjMonUXxtOrAR7cA0lsSIvHQ8UTd9z+mMBn7NyBhWaKxq0jA==}
+    peerDependencies:
+      elysia: '>= 1.0.2'
 
   '@esbuild/aix-ppc64@0.21.4':
     resolution: {integrity: sha512-Zrm+B33R4LWPLjDEVnEqt2+SLTATlru1q/xYKVn8oVTbiRBGmK2VIMoIYGJDGyftnGaC788IuzGFAlb7IQ0Y8A==}
@@ -2679,6 +2687,10 @@ snapshots:
       chalk: 2.4.2
       js-tokens: 4.0.0
       picocolors: 1.0.1
+
+  '@elysiajs/cors@1.0.2(elysia@1.0.22(@sinclair/typebox@0.32.31)(typescript@5.4.5))':
+    dependencies:
+      elysia: 1.0.22(@sinclair/typebox@0.32.31)(typescript@5.4.5)
 
   '@esbuild/aix-ppc64@0.21.4':
     optional: true

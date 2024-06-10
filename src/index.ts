@@ -1,16 +1,17 @@
+import { cors } from '@elysiajs/cors';
 import { parse } from 'acorn';
 import { $ } from 'bun';
+import { Database } from 'bun:sqlite';
 import { Elysia, redirect } from 'elysia';
 import { type Node } from 'estree-walker';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import * as pacote from 'pacote';
 import { format } from 'prettier';
 import * as resolve from 'resolve.exports';
 import type { PackageJson } from 'type-fest';
 import { walk } from 'zimmerframe';
 import compilers from './scripts/localcache/svelte';
-import { Database } from 'bun:sqlite';
-import * as pacote from 'pacote';
 
 const db = new Database('db.sqlite');
 
@@ -229,15 +230,17 @@ async function resolve_from_pkg(pkg: PackageJson, subpath: string, pkg_url_base:
 }
 
 new Elysia()
+	.use(cors())
 	.get('/', ({}) => 'Hello')
 	.get('/favicon.ico', ({ set }) => (set.status = 204))
-	.get('/*', async ({ request }) => {
+	.get('/*', async ({ request, set }) => {
 		const config = await resolve_config_from_url(new URL(request.url));
 		const resolved_url = await stringify_url_from_config(config);
 
 		const hit = cache.get(resolved_url.pathname);
 
 		if (hit) {
+			set.headers['Content-Type'] = 'application/javascript';
 			console.info('CACHE HIT:', resolved_url.pathname);
 			return hit;
 		}
@@ -285,14 +288,14 @@ new Elysia()
 			const ast = parse(output, { ecmaVersion: 2020, sourceType: 'module' });
 
 			const state = {
-				importedModules: new Map<string, [number, number]>(),
+				external_modules: new Map<string, [number, number]>(),
 			};
 
 			const transformed = walk(ast as Node, state, {
 				ImportExpression(node, { state, next }) {
 					if ((node.source as any).value.startsWith('.')) next();
 
-					state.importedModules.set((node.source as any).value + '', [
+					state.external_modules.set((node.source as any).value + '', [
 						(node.source as any).start,
 						(node.source as any).end,
 					]);
@@ -302,7 +305,7 @@ new Elysia()
 				ImportDeclaration(node, { state, next }) {
 					console.log(node.source.value, node.source.value?.toString().startsWith('.'));
 					if (String(node.source.value).startsWith('.')) return next();
-					state.importedModules.set(node.source.value + '', [
+					state.external_modules.set(node.source.value + '', [
 						(node.source as any).start,
 						(node.source as any).end,
 					]);
@@ -318,9 +321,8 @@ new Elysia()
 
 		cache.set(resolved_url.pathname, output);
 
+		set.headers['Content-Type'] = 'application/javascript';
 		// Now go through all the imports and resolve them
 		return await format(output, { filepath: 'x.js', useTabs: true, singleQuote: true });
 	})
 	.listen(1234, ({ port }) => console.log('Listening on http://localhost:' + port));
-
-export {};
