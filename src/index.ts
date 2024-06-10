@@ -5,7 +5,7 @@ import { Database } from 'bun:sqlite';
 import { Elysia, redirect } from 'elysia';
 import { type Node } from 'estree-walker';
 import MagicString from 'magic-string';
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import * as pacote from 'pacote';
 import { format } from 'prettier';
@@ -68,7 +68,6 @@ async function resolve_config_from_url(url: URL) {
 	let flags = {} as Partial<Record<(typeof reserved_flags)[number], string>>;
 
 	if (already_processed) {
-		console.log(1);
 		// All the info is the url. Get it!
 		({
 			registry = 'npm',
@@ -112,7 +111,6 @@ async function resolve_config_from_url(url: URL) {
 
 		if (url.pathname.endsWith('.svelte') || svelte_flag) {
 			// The versin could be anything from 2 to 3.1 to 4.0.0 to 5 to next. Resolve it how npm install does
-			console.log([svelte_flag]);
 			const { version } = await pacote.manifest(`svelte@${svelte_flag || '4'}`);
 			flags.svelte = version;
 		}
@@ -259,18 +257,18 @@ const app = new Elysia()
 
 		const hit = cache.get(resolved_url.pathname);
 
-		if (hit) {
-			set.headers['Content-Type'] = 'application/javascript';
-			set.headers['Content-Encoding'] = 'gzip';
-			// set.headers['Cache-Control'] = 'public, max-age=31536000, immutable';
-			console.info('CACHE HIT:', resolved_url.pathname);
-			return Bun.gzipSync(hit);
-		}
+		// if (hit) {
+		// 	set.headers['Content-Type'] = 'application/javascript';
+		// 	set.headers['Content-Encoding'] = 'gzip';
+		// 	// set.headers['Cache-Control'] = 'public, max-age=31536000, immutable';
+		// 	console.info('CACHE HIT:', resolved_url.pathname);
+		// 	return Bun.gzipSync(hit);
+		// }
 
 		const folder_contents = await readdir(config.folder);
 		if (!folder_contents.includes('pnpm-lock.yaml')) {
-			await writeFile(
-				`${config.folder}/package.json`,
+			await Bun.write(
+				Bun.file(`${config.folder}/pnpm-lock.yaml`),
 				JSON.stringify({ dependencies: { [config.name]: config.version } }, null, 2)
 			);
 
@@ -283,11 +281,11 @@ const app = new Elysia()
 
 		const full_path = path.join(config.folder, 'node_modules', config.name, config.subpath);
 
-		const content = await readFile(full_path, 'utf8');
+		const content = await Bun.file(full_path).text();
 
 		let output = content;
 
-		if (config.flags.svelte) {
+		if (config.flags.svelte && full_path.endsWith('.svelte')) {
 			try {
 				const compile = (await compilers.get(
 					config.flags.svelte
@@ -301,12 +299,12 @@ const app = new Elysia()
 
 				output = js.code;
 			} catch (e) {
-				console.error(e);
+				console.trace('compiler-err', e, content, full_path);
 			}
 		}
 
 		try {
-			const ast = parse(output, { ecmaVersion: 2022, sourceType: 'module' });
+			const ast = parse(output, { ecmaVersion: 2022, sourceType: 'module', sourceFile: full_path });
 
 			const state = {
 				imports_exports: new Map<string, Set<[number, number]>>(),
@@ -346,12 +344,10 @@ const app = new Elysia()
 
 			const ms = new MagicString(output);
 
-			// console.log(state.imports_exports);
-
 			for (const [import_path, locs] of state.imports_exports) {
 				let final_path = path.join('/npm/', import_path);
 				if (import_path.startsWith('.')) {
-					console.log('Relative import:', import_path);
+					// console.log('Relative import:', import_path);
 					// Resolve with pathname
 					const resolved = new URL(import_path, config.url);
 					if (config.flags.svelte) {
@@ -360,7 +356,7 @@ const app = new Elysia()
 
 					final_path = (await stringify_url_from_config(await resolve_config_from_url(resolved)))
 						.pathname;
-					console.log({ final_path });
+					// console.log({ final_path });
 				} else {
 					// We also need to point the dependency to the version in the package.json of the current package
 					config.package_json.dependencies ??= {};
@@ -379,6 +375,8 @@ const app = new Elysia()
 					if (config.flags.svelte && name === 'svelte') {
 						version = config.flags.svelte;
 					}
+
+					if (import_path.includes('svelte/internal')) console.log('bleh', import_path, locs);
 
 					const { version: resolved_version } = await pacote.manifest(`${name}@${version}`);
 					const package_json = await fetch_package_info(name, resolved_version);
@@ -399,8 +397,8 @@ const app = new Elysia()
 						await mkdir(folder, { recursive: true });
 					} catch {}
 
-					await writeFile(
-						`${folder}/package.json`,
+					await Bun.write(
+						Bun.file(`${folder}/pnpm-lock.yaml`),
 						JSON.stringify({ dependencies: { [name]: version } }, null, 2)
 					);
 
@@ -422,7 +420,7 @@ const app = new Elysia()
 
 			output = ms.toString();
 
-			console.log(state);
+			if (output.includes('svelte/internal')) console.log('bleh', state);
 		} catch (e) {
 			console.trace(e);
 		}
