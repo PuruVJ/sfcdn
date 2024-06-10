@@ -4,7 +4,8 @@
 		"module": "ESNext",
 		"target": "ESNext",
 		"types": ["bun-types"],
-		"verbatimModuleSyntax": true
+		"verbatimModuleSyntax": true,
+		"strict": true
 	},
 	"include": ["src/**/*"]
 }

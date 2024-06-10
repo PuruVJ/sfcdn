@@ -5,9 +5,10 @@
 		"acorn": "^8.11.3",
 		"elysia": "^1.0.22",
 		"estree-walker": "^3.0.3",
+		"pacote": "^18.0.6",
 		"prettier": "^3.3.1",
 		"resolve.exports": "^2.0.2",
-		"svelte": "3.0.0-alpha6",
+		"svelte": "^4.2.18",
 		"tsup": "^8.1.0",
 		"type-fest": "^4.19.0",
 		"typescript": "^5.4.5",
@@ -16,6 +17,7 @@
 	},
 	"devDependencies": {
 		"@types/node": "^20.14.2",
+		"@types/pacote": "^11.1.8",
 		"bun-types": "^1.1.12"
 	}
 }
