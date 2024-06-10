@@ -52,14 +52,18 @@ const PROCESSED_URL_REGEX =
 const BUILD_VERSION = 'pre.1';
 
 // ORDER SENSITIVE
-const reserved_flags = ['svelte'] as const;
-const flag_aliases: Record<(typeof reserved_flags)[number], string> = { svelte: 's' };
+const reserved_flags = ['svelte', 'metadata'] as const;
+const flag_aliases = {
+	svelte: 's',
+	metadata: 'md',
+} satisfies Record<(typeof reserved_flags)[number], string | null>;
+
 async function resolve_config_from_url(url: URL) {
 	// First check whether its already processed to the format we like. Should be starting with !!cdnv:something at the very end
 	const processed = PROCESSED_URL_REGEX.exec(url.pathname);
 
 	let registry: string, name: string, semversion: string, export_or_file: string;
-	let flags = {} as Record<(typeof reserved_flags)[number], string>;
+	let flags = {} as Partial<Record<(typeof reserved_flags)[number], string>>;
 
 	if (processed) {
 		// All the info is the url. Get it!
@@ -91,7 +95,6 @@ async function resolve_config_from_url(url: URL) {
 				}
 			}
 		}
-		console.log(flags);
 	} else {
 		// First thing, resolve the version number of the package itself
 		({
@@ -108,6 +111,17 @@ async function resolve_config_from_url(url: URL) {
 			// The versin could be anything from 2 to 3.1 to 4.0.0 to 5 to next. Resolve it how npm install does
 			const { version } = await pacote.manifest(`svelte@${svelte_flag}`);
 			flags.svelte = version;
+		}
+	}
+
+	if (url.searchParams.has('metadata')) {
+		const metadata_val = url.searchParams.get('metadata');
+		flags.metadata = '1';
+
+		if (metadata_val) {
+			if (/(false|0|null)/.test(metadata_val)) {
+				delete flags.metadata;
+			}
 		}
 	}
 
@@ -238,11 +252,12 @@ new Elysia()
 
 		const hit = cache.get(resolved_url.pathname);
 
-		if (hit && true) {
-			set.headers['Content-Type'] = 'application/javascript';
-			console.info('CACHE HIT:', resolved_url.pathname);
-			return hit;
-		}
+		// if (hit) {
+		// 	set.headers['Content-Type'] = 'application/javascript';
+		// 	set.headers['Content-Encoding'] = 'gzip';
+		// 	console.info('CACHE HIT:', resolved_url.pathname);
+		// 	return Bun.gzipSync(hit);
+		// }
 
 		const folder_contents = await readdir(config.folder);
 		if (!folder_contents.includes('pnpm-lock.yaml')) {
@@ -251,7 +266,7 @@ new Elysia()
 				JSON.stringify({ dependencies: { [config.name]: config.version } }, null, 2)
 			);
 
-			await $`cd packages/${config.proj_id} && pnpm install --ignore-scripts`;
+			await $`cd packages/${config.proj_id} && pnpm install --prefer-offline --ignore-scripts`;
 		}
 
 		if (config.url.pathname !== resolved_url.pathname) {
@@ -264,10 +279,8 @@ new Elysia()
 
 		let output = content;
 
-		if (full_path.endsWith('.svelte')) {
+		if (config.flags.svelte) {
 			try {
-				// Fetch full version query.svelte
-
 				const compile = (await compilers.get(
 					config.flags.svelte
 				)?.()) as (typeof import('svelte/compiler'))['compile'];
@@ -324,7 +337,9 @@ new Elysia()
 					final_path = resolved.pathname;
 				}
 
-				ms.overwrite(start, end, `'http://localhost:1234${final_path}'`);
+				// We also need to point the dependency to the version in the package.json of the current package
+
+				ms.overwrite(start, end, `'${final_path}'`);
 			}
 
 			console.log(1);
@@ -339,8 +354,9 @@ new Elysia()
 		cache.set(resolved_url.pathname, output);
 
 		set.headers['Content-Type'] = 'application/javascript';
-		// Now go through all the imports and resolve them
-		// return await format(output, { filepath: 'x.js', useTabs: true, singleQuote: true });
-		return output;
+		set.headers['Content-Encoding'] = 'gzip';
+
+		output = await format(output, { filepath: 'x.js', useTabs: true, singleQuote: true });
+		return Bun.gzipSync(output);
 	})
 	.listen(1234, ({ port }) => console.log('Listening on http://localhost:' + port));
