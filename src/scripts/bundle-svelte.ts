@@ -24,57 +24,57 @@ const pnpm_files = {
 };
 const root = 'src/scripts/localcache';
 const folder = `${root}/svelte`;
-if (true) {
-	try {
-		for (const v of versions) {
-			await mkdir(folder + '/' + v, { recursive: true });
-			// Write package.json with svelte version as dependency
-			await $`echo '{ "dependencies": { "svelte": "${v}" } }' > ${folder + '/' + v}/package.json`;
-			// Write an index.js file which export compile function from svelte/compiler
-			await $`echo ${v.startsWith('4') ? 'const { compile } = require("svelte/compiler");\n\nmodule.exports = { compile }' : 'export {compile} from "svelte/compiler";'} > ${folder + '/' + v}/index.js`;
-		}
-	} catch {}
+// if (true) {
+// 	try {
+// 		for (const v of versions) {
+// 			await mkdir(folder + '/' + v, { recursive: true });
+// 			// Write package.json with svelte version as dependency
+// 			await $`echo '{ "dependencies": { "svelte": "${v}" } }' > ${folder + '/' + v}/package.json`;
+// 			// Write an index.js file which export compile function from svelte/compiler
+// 			await $`echo ${v.startsWith('4') ? 'const { compile } = require("svelte/compiler");\n\nmodule.exports = { compile }' : 'export {compile} from "svelte/compiler";'} > ${folder + '/' + v}/index.js`;
+// 		}
+// 	} catch {}
 
-	await $`cd ${root} && echo ${pnpm_files['.npmrc']} > .npmrc`;
-	await $`cd ${root} && echo '${pnpm_files['package.json']}' > package.json`;
-	await $`cd ${root} && echo '${pnpm_files['pnpm-workspace.yaml']}' > pnpm-workspace.yaml`;
+// 	await $`cd ${root} && echo ${pnpm_files['.npmrc']} > .npmrc`;
+// 	await $`cd ${root} && echo '${pnpm_files['package.json']}' > package.json`;
+// 	await $`cd ${root} && echo '${pnpm_files['pnpm-workspace.yaml']}' > pnpm-workspace.yaml`;
 
-	// for (const version of versions) {
-	// 	await $`echo "Copying ${version}" && cd ${
-	// 		folder + '/' + version
-	// 	} && pnpm install svelte@${version} acorn magic-string`;
-	// }
-	await $`cd ${root} && pnpm install`;
-}
+// 	for (const version of versions) {
+// 		await $`echo "Copying ${version}" && cd ${
+// 			folder + '/' + version
+// 		} && pnpm install svelte@${version} acorn magic-string`;
+// 	}
+// 	await $`cd ${root} && pnpm install`;
+// }
 
-if (false) {
-	const failed: string[] = [];
-	const sizes = {};
-	for (const version of versions.sort()) {
-		try {
-			await build({
-				entry: [folder + '/' + version + '/index.js'],
-				format: 'esm',
-				outDir: folder + '/' + version,
-				treeshake: 'smallest',
-				pure: ['compile'],
-				bundle: true,
-				noExternal: ['svelte/compiler'],
-			});
-			sizes[version] =
-				(
-					(await readFile(folder + '/' + version + '/index.mjs', 'utf-8').then(
-						(content) => content.length
-					)) / 1024
-				).toFixed(2) + 'kb';
-		} catch (e) {
-			failed.push(version);
-		}
-	}
+// if (true) {
+// 	const failed: string[] = [];
+// 	const sizes: Record<string, string> = {};
+// 	for (const version of versions.sort()) {
+// 		try {
+// 			await build({
+// 				entry: [folder + '/' + version + '/index.js'],
+// 				format: 'esm',
+// 				outDir: folder + '/' + version,
+// 				treeshake: 'smallest',
+// 				pure: ['compile'],
+// 				bundle: true,
+// 				noExternal: ['svelte/compiler'],
+// 			});
+// 			sizes[version] =
+// 				(
+// 					(await readFile(folder + '/' + version + '/index.mjs', 'utf-8').then(
+// 						(content) => content.length
+// 					)) / 1024
+// 				).toFixed(2) + 'kb';
+// 		} catch (e) {
+// 			failed.push(version);
+// 		}
+// 	}
 
-	console.log(sizes);
-	console.log('Failed to build:', failed);
-}
+// 	console.log(sizes);
+// 	console.log('Failed to build:', failed);
+// }
 
 // Write a file which imports from index.js within each folder, makes an object with {version: compile} and exports the object
 // await $`echo 'export default {${versions
@@ -92,5 +92,11 @@ const content =
 	'\n]);';
 
 await writeFile(folder + '/index.js', content);
+await writeFile(
+	folder + '/index.d.ts',
+	`declare const x: Map<string, () => Promise<(typeof import('svelte/compiler'))['compile']>>;
+export default x;
+`
+);
 
 export {};

@@ -268,11 +268,11 @@ const app = new Elysia()
 		const folder_contents = await readdir(config.folder);
 		if (!folder_contents.includes('pnpm-lock.yaml')) {
 			await Bun.write(
-				Bun.file(`${config.folder}/pnpm-lock.yaml`),
+				Bun.file(`${config.folder}/package.json`),
 				JSON.stringify({ dependencies: { [config.name]: config.version } }, null, 2)
 			);
 
-			await $`cd packages/${config.proj_id} && pnpm install --prefer-offline --ignore-scripts`;
+			await $`cd packages/${config.proj_id} && pnpm install --ignore-scripts`;
 		}
 
 		if (config.url.pathname !== resolved_url.pathname) {
@@ -303,129 +303,136 @@ const app = new Elysia()
 			}
 		}
 
-		try {
-			const ast = parse(output, { ecmaVersion: 2022, sourceType: 'module', sourceFile: full_path });
+		if (!full_path.endsWith('.d.ts')) {
+			try {
+				const ast = parse(output, {
+					ecmaVersion: 2022,
+					sourceType: 'module',
+					sourceFile: full_path,
+				});
 
-			const state = {
-				imports_exports: new Map<string, Set<[number, number]>>(),
-			};
+				const state = {
+					imports_exports: new Map<string, Set<[number, number]>>(),
+				};
 
-			walk(ast as Node, state, {
-				_(node, { state, next }) {
-					const node_types: (typeof node)['type'][] = [
-						'ImportExpression',
-						'ImportDeclaration',
-						'ExportNamedDeclaration',
-						'ExportAllDeclaration',
-						'ExportDefaultDeclaration',
-					];
+				walk(ast as Node, state, {
+					_(node, { state, next }) {
+						const node_types: (typeof node)['type'][] = [
+							'ImportExpression',
+							'ImportDeclaration',
+							'ExportNamedDeclaration',
+							'ExportAllDeclaration',
+							'ExportDefaultDeclaration',
+						];
 
-					if (!node_types.includes(node.type)) {
-						return next(state);
-					}
-
-					if ('source' in node && node.source != null && 'value' in node.source) {
-						const typed_node_source = node.source as Literal;
-						if (state.imports_exports.has(typed_node_source.value + '')) {
-							state.imports_exports
-								.get(typed_node_source.value + '')
-								?.add([typed_node_source.start, typed_node_source.end]);
-						} else {
-							state.imports_exports.set(typed_node_source.value + '', new Set());
-							state.imports_exports
-								.get(typed_node_source.value + '')
-								?.add([typed_node_source.start, typed_node_source.end]);
+						if (!node_types.includes(node.type)) {
+							return next(state);
 						}
+
+						if ('source' in node && node.source != null && 'value' in node.source) {
+							const typed_node_source = node.source as Literal;
+							if (state.imports_exports.has(typed_node_source.value + '')) {
+								state.imports_exports
+									.get(typed_node_source.value + '')
+									?.add([typed_node_source.start, typed_node_source.end]);
+							} else {
+								state.imports_exports.set(typed_node_source.value + '', new Set());
+								state.imports_exports
+									.get(typed_node_source.value + '')
+									?.add([typed_node_source.start, typed_node_source.end]);
+							}
+						}
+
+						next(state);
+					},
+				});
+
+				const ms = new MagicString(output);
+
+				for (const [import_path, locs] of state.imports_exports) {
+					let final_path = path.join('/npm/', import_path);
+					if (import_path.startsWith('.')) {
+						// console.log('Relative import:', import_path);
+						// Resolve with pathname
+						const resolved = new URL(import_path, config.url);
+						if (config.flags.svelte) {
+							resolved.searchParams.set('svelte', config.flags.svelte);
+						}
+
+						final_path = (await stringify_url_from_config(await resolve_config_from_url(resolved)))
+							.pathname;
+						// console.log({ final_path });
+					} else {
+						// We also need to point the dependency to the version in the package.json of the current package
+						config.package_json.dependencies ??= {};
+						config.package_json.devDependencies ??= {};
+						config.package_json.peerDependencies ??= {};
+
+						const [name] = /(?:@[^/]+\/)?[^/]+/.exec(import_path) ?? [];
+						if (!name) throw new Error('Could not extract name from import path ' + import_path);
+
+						let version =
+							config.package_json.dependencies[name] ??
+							config.package_json.devDependencies[name] ??
+							config.package_json.peerDependencies[name] ??
+							'latest';
+
+						if (config.flags.svelte && name === 'svelte') {
+							version = config.flags.svelte;
+						}
+
+						if (import_path.includes('svelte/internal')) console.log('bleh', import_path, locs);
+
+						const { version: resolved_version } = await pacote.manifest(`${name}@${version}`);
+						const package_json = await fetch_package_info(name, resolved_version);
+
+						final_path = String(
+							await resolve_from_pkg(
+								package_json,
+								final_path.replace(`/npm/${name}`, '').replace(/^\//, ''),
+								path.join(config.folder, 'node_modules', name)
+							)
+						);
+
+						final_path = path.join('/npm/', name + '@' + resolved_version, final_path);
+
+						const folder = `${PACKAGES_ROOT}/${name}@${resolved_version}`;
+
+						try {
+							await mkdir(folder, { recursive: true });
+						} catch {}
+
+						await Bun.write(
+							Bun.file(`${folder}/package.json`),
+							JSON.stringify({ dependencies: { [name]: version } }, null, 2)
+						);
+
+						await $`cd ${folder} && pnpm install --prefer-offline --ignore-scripts`;
+
+						// console.log(new URL(final_path, config.url.origin));
+						final_path = (
+							await stringify_url_from_config(
+								await resolve_config_from_url(new URL(final_path, config.url.origin))
+							)
+						).pathname;
+						// console.log(final_path);}
 					}
 
-					next(state);
-				},
-			});
-
-			const ms = new MagicString(output);
-
-			for (const [import_path, locs] of state.imports_exports) {
-				let final_path = path.join('/npm/', import_path);
-				if (import_path.startsWith('.')) {
-					// console.log('Relative import:', import_path);
-					// Resolve with pathname
-					const resolved = new URL(import_path, config.url);
-					if (config.flags.svelte) {
-						resolved.searchParams.set('svelte', config.flags.svelte);
+					for (const [start, end] of locs) {
+						ms.overwrite(start, end, `'${final_path}'`);
 					}
-
-					final_path = (await stringify_url_from_config(await resolve_config_from_url(resolved)))
-						.pathname;
-					// console.log({ final_path });
-				} else {
-					// We also need to point the dependency to the version in the package.json of the current package
-					config.package_json.dependencies ??= {};
-					config.package_json.devDependencies ??= {};
-					config.package_json.peerDependencies ??= {};
-
-					const [name] = /(?:@[^/]+\/)?[^/]+/.exec(import_path) ?? [];
-					if (!name) throw new Error('Could not extract name from import path ' + import_path);
-
-					let version =
-						config.package_json.dependencies[name] ??
-						config.package_json.devDependencies[name] ??
-						config.package_json.peerDependencies[name] ??
-						'latest';
-
-					if (config.flags.svelte && name === 'svelte') {
-						version = config.flags.svelte;
-					}
-
-					if (import_path.includes('svelte/internal')) console.log('bleh', import_path, locs);
-
-					const { version: resolved_version } = await pacote.manifest(`${name}@${version}`);
-					const package_json = await fetch_package_info(name, resolved_version);
-
-					final_path = String(
-						await resolve_from_pkg(
-							package_json,
-							final_path.replace(`/npm/${name}`, '').replace(/^\//, ''),
-							path.join(config.folder, 'node_modules', name)
-						)
-					);
-
-					final_path = path.join('/npm/', name + '@' + resolved_version, final_path);
-
-					const folder = `${PACKAGES_ROOT}/${name}@${resolved_version}`;
-
-					try {
-						await mkdir(folder, { recursive: true });
-					} catch {}
-
-					await Bun.write(
-						Bun.file(`${folder}/pnpm-lock.yaml`),
-						JSON.stringify({ dependencies: { [name]: version } }, null, 2)
-					);
-
-					await $`cd ${folder} && pnpm install --prefer-offline --ignore-scripts`;
-
-					// console.log(new URL(final_path, config.url.origin));
-					final_path = (
-						await stringify_url_from_config(
-							await resolve_config_from_url(new URL(final_path, config.url.origin))
-						)
-					).pathname;
-					// console.log(final_path);}
 				}
 
-				for (const [start, end] of locs) {
-					ms.overwrite(start, end, `'${final_path}'`);
-				}
+				output = ms.toString();
+
+				if (output.includes('svelte/internal')) console.log('bleh', state);
+			} catch (e) {
+				console.trace(e);
 			}
 
-			output = ms.toString();
-
-			if (output.includes('svelte/internal')) console.log('bleh', state);
-		} catch (e) {
-			console.trace(e);
+			if (!full_path.endsWith('.min.js'))
+				output = await format(output, { filepath: 'x.js', useTabs: true, singleQuote: true });
 		}
-
-		output = await format(output, { filepath: 'x.js', useTabs: true, singleQuote: true });
 		cache.set(resolved_url.pathname, output);
 
 		set.headers['Content-Type'] = 'application/javascript';
@@ -436,14 +443,10 @@ const app = new Elysia()
 	});
 // .listen(1234, ({ port }) => console.log('Listening on http://localhost:' + port));
 
+console.log('Listening on http://localhost:1234');
 Bun.serve({
 	port: 1234,
 	fetch(request) {
 		return app.handle(request);
-	},
-	tls: {
-		key: Bun.file('./certs/myCA.key'),
-		cert: Bun.file('./certs/myCA.pem'),
-		passphrase: '123456789',
 	},
 });
