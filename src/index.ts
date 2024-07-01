@@ -38,6 +38,74 @@ class Cache {
 
 const cache = new Cache();
 
+class InstallQueue {
+	#queue: string[] = [];
+	#flushing = false;
+
+	async add(package_name: string, version: string, instant = false) {
+		// Add to the queue
+
+		console.log({ instant });
+		await this.#preinstall(package_name, version, instant);
+
+		const start_time = Date.now();
+		if (!instant) {
+			this.#queue.push(`${package_name}@${version}`);
+			this.#flush();
+		}
+
+		console.log('Took', Date.now() - start_time, 'ms to install', package_name, version);
+	}
+
+	async #preinstall(package_name: string, version: string, instant: boolean) {
+		const proj_id = `${package_name}@${version}`;
+		const folder = `${PACKAGES_ROOT}/${proj_id}`;
+
+		try {
+			await mkdir(folder, { recursive: true });
+		} catch {}
+
+		const folder_contents = await readdir(folder);
+		if (folder_contents.includes('pnpm-lock.yaml')) {
+			return;
+		}
+
+		await Bun.write(
+			Bun.file(`${folder}/package.json`),
+			JSON.stringify({ dependencies: { [package_name]: version } }, null, 2)
+		);
+
+		if (!instant) return;
+
+		await $`cd packages/${proj_id} && pnpm install --ignore-scripts`;
+	}
+
+	async #flush() {
+		if (this.#flushing) return;
+
+		// Start going through the queue, run pnpm install for each. Also ensure queue being changed is also detected
+		this.#flushing = true;
+
+		const queue = this.#queue;
+		this.#queue = [];
+
+		for (const pkg of queue) {
+			const folder_contents = await readdir(`${PACKAGES_ROOT}/${pkg}`);
+			if (folder_contents.includes('pnpm-lock.yaml')) continue;
+
+			await $`cd packages/${pkg} && pnpm install --prefer-offline --ignore-scripts`;
+		}
+
+		this.#flushing = false;
+
+		if (this.#queue.length) {
+			await this.#flush();
+		}
+	}
+}
+
+const installer = new InstallQueue();
+
 async function fetch_package_info(name: string, version?: string) {
 	let url = `https://registry.npmjs.org/${name}`;
 	if (version) url += `/${version}`;
@@ -127,9 +195,12 @@ async function resolve_config_from_url(url: URL) {
 		}
 	}
 
-	console.log({ name, semversion });
-	const { version } = await pacote.manifest(`${name}@${semversion}`);
-	const package_json = await fetch_package_info(name, version);
+	let final_version = semversion;
+	if (!already_processed) {
+		const { version } = await pacote.manifest(`${name}@${semversion}`);
+		final_version = version;
+	}
+	const package_json = await fetch_package_info(name, final_version);
 
 	const proj_id = `${package_json.name}@${package_json.version}`;
 	const folder = `${PACKAGES_ROOT}/${proj_id}`;
@@ -145,7 +216,7 @@ async function resolve_config_from_url(url: URL) {
 	return {
 		registry,
 		name,
-		version,
+		version: final_version,
 		subpath,
 		url,
 		package_json,
@@ -245,201 +316,208 @@ async function resolve_from_pkg(pkg: PackageJson, subpath: string, pkg_url_base:
 	return subpath;
 }
 
+const current_urls = new Set<string>();
+
+async function compile_url(request: Request, follow_up = false): Promise<Response> {
+	if (current_urls.has(request.url) && follow_up) {
+		console.log('FOLLOWUP NONOPERATIONAL:', request.url);
+		return new Response(null, { status: 204 });
+	}
+
+	const config = await resolve_config_from_url(new URL(request.url));
+	const resolved_url = await stringify_url_from_config(config);
+
+	current_urls.add(resolved_url.href);
+
+	if (config.url.pathname !== resolved_url.pathname) {
+		return new Response(null, {
+			status: 307,
+			headers: {
+				Location: resolved_url.toString(),
+			},
+		});
+	}
+
+	console.log(config.flags);
+
+	const hit = cache.get(resolved_url.pathname);
+
+	if (hit) {
+		console.info('CACHE HIT:', resolved_url.pathname);
+		current_urls.delete(resolved_url.href);
+
+		return new Response(Bun.gzipSync(hit), {
+			headers: {
+				'Content-Type': 'application/javascript',
+				'Content-Encoding': 'gzip',
+				// 'Cache-Control': 'public, max-age=31536000, immutable',
+			},
+		});
+	}
+
+	await installer.add(config.name, config.version, true);
+
+	const full_path = path.join(config.folder, 'node_modules', config.name, config.subpath);
+
+	const content = await Bun.file(full_path).text();
+
+	let output = content;
+
+	if (config.flags.svelte && full_path.endsWith('.svelte')) {
+		try {
+			const compile = await compilers.get(config.flags.svelte)?.();
+
+			if (!compile)
+				throw new Error('Could not find compiler for svelte version ' + config.flags.svelte);
+
+			const { js } = compile(content, {
+				name: 'App',
+				filename: full_path,
+				dev: false,
+			});
+
+			output = js.code;
+		} catch (e) {
+			console.trace('compiler-err', e, content, full_path);
+		}
+	}
+
+	if (!full_path.endsWith('.d.ts')) {
+		try {
+			const ast = parse(output, {
+				ecmaVersion: 2022,
+				sourceType: 'module',
+				sourceFile: full_path,
+			});
+
+			const imports_exports = new Map<string, Set<[number, number]>>();
+
+			walk(ast as Node, imports_exports, {
+				_(node, { state, next }) {
+					const node_types: (typeof node)['type'][] = [
+						'ImportExpression',
+						'ImportDeclaration',
+						'ExportNamedDeclaration',
+						'ExportAllDeclaration',
+						'ExportDefaultDeclaration',
+					];
+
+					if (!node_types.includes(node.type)) {
+						return next(state);
+					}
+
+					if ('source' in node && node.source != null && 'value' in node.source) {
+						const typed_node_source = node.source as Literal;
+						if (!state.has(typed_node_source.value + '')) {
+							state.set(typed_node_source.value + '', new Set());
+						}
+
+						state
+							.get(typed_node_source.value + '')
+							?.add([typed_node_source.start, typed_node_source.end]);
+					}
+
+					next(state);
+				},
+			});
+
+			const ms = new MagicString(output);
+
+			for (const [import_path, locs] of imports_exports) {
+				let final_path = path.join('/npm/', import_path);
+				if (import_path.startsWith('.')) {
+					// console.log('Relative import:', import_path);
+					// Resolve with pathname
+					const resolved = new URL(import_path, config.url);
+					if (config.flags.svelte) {
+						resolved.searchParams.set('svelte', config.flags.svelte);
+					}
+
+					final_path = (await stringify_url_from_config(await resolve_config_from_url(resolved)))
+						.pathname;
+					// console.log({ final_path });
+				} else {
+					// We also need to point the dependency to the version in the package.json of the current package
+					config.package_json.dependencies ??= {};
+					config.package_json.devDependencies ??= {};
+					config.package_json.peerDependencies ??= {};
+
+					const [name] = /(?:@[^/]+\/)?[^/]+/.exec(import_path) ?? [];
+					if (!name) throw new Error('Could not extract name from import path ' + import_path);
+
+					let version =
+						config.package_json.dependencies[name] ??
+						config.package_json.devDependencies[name] ??
+						config.package_json.peerDependencies[name] ??
+						'latest';
+
+					if (config.flags.svelte && name === 'svelte') {
+						version = config.flags.svelte;
+					}
+
+					if (import_path.includes('svelte/internal')) console.log('bleh', import_path, locs);
+
+					const { version: resolved_version } = await pacote.manifest(`${name}@${version}`);
+					const package_json = await fetch_package_info(name, resolved_version);
+
+					final_path = String(
+						await resolve_from_pkg(
+							package_json,
+							final_path.replace(`/npm/${name}`, '').replace(/^\//, ''),
+							path.join(config.folder, 'node_modules', name)
+						)
+					);
+
+					final_path = path.join('/npm/', name + '@' + resolved_version, final_path);
+
+					await installer.add(name, resolved_version);
+
+					final_path = (
+						await stringify_url_from_config(
+							await resolve_config_from_url(new URL(final_path, config.url.origin))
+						)
+					).pathname;
+					// console.log(final_path);}
+				}
+
+				// Fire off the request to process subsequent imports and exports too
+				compile_url(new Request(new URL(final_path, config.url.origin)), true);
+				// console.log('Following ', new URL(final_path, config.url.origin).href);
+
+				for (const [start, end] of locs) {
+					ms.overwrite(start, end, `'${final_path}'`);
+				}
+			}
+
+			output = ms.toString();
+
+			if (output.includes('svelte/internal')) console.log('bleh', imports_exports);
+		} catch (e) {
+			console.trace(e);
+		}
+
+		if (!full_path.endsWith('.min.js'))
+			output = await format(output, { filepath: 'x.js', useTabs: true, singleQuote: true });
+	}
+
+	cache.set(resolved_url.pathname, output);
+	current_urls.delete(resolved_url.href);
+
+	return new Response(Bun.gzipSync(output), {
+		headers: {
+			'Content-Type': 'application/javascript',
+			'Content-Encoding': 'gzip',
+			// 'Cache-Control': 'public, max-age=31536000, immutable',
+		},
+	});
+}
+
 const app = new Elysia()
 	.use(cors())
 	.get('/', ({}) => 'Hello')
 	.get('/favicon.ico', ({ set }) => (set.status = 204))
-	.get('/*', async ({ request, set }) => {
-		const config = await resolve_config_from_url(new URL(request.url));
-		const resolved_url = await stringify_url_from_config(config);
-
-		console.log(config.flags);
-
-		const hit = cache.get(resolved_url.pathname);
-
-		// if (hit) {
-		// 	set.headers['Content-Type'] = 'application/javascript';
-		// 	set.headers['Content-Encoding'] = 'gzip';
-		// 	// set.headers['Cache-Control'] = 'public, max-age=31536000, immutable';
-		// 	console.info('CACHE HIT:', resolved_url.pathname);
-		// 	return Bun.gzipSync(hit);
-		// }
-
-		const folder_contents = await readdir(config.folder);
-		if (!folder_contents.includes('pnpm-lock.yaml')) {
-			await Bun.write(
-				Bun.file(`${config.folder}/package.json`),
-				JSON.stringify({ dependencies: { [config.name]: config.version } }, null, 2)
-			);
-
-			await $`cd packages/${config.proj_id} && pnpm install --ignore-scripts`;
-		}
-
-		if (config.url.pathname !== resolved_url.pathname) {
-			return redirect(resolved_url.toString(), 307);
-		}
-
-		const full_path = path.join(config.folder, 'node_modules', config.name, config.subpath);
-
-		const content = await Bun.file(full_path).text();
-
-		let output = content;
-
-		if (config.flags.svelte && full_path.endsWith('.svelte')) {
-			try {
-				const compile = (await compilers.get(
-					config.flags.svelte
-				)?.()) as (typeof import('svelte/compiler'))['compile'];
-
-				const { js } = compile(content, {
-					name: 'App',
-					filename: full_path,
-					dev: false,
-				});
-
-				output = js.code;
-			} catch (e) {
-				console.trace('compiler-err', e, content, full_path);
-			}
-		}
-
-		if (!full_path.endsWith('.d.ts')) {
-			try {
-				const ast = parse(output, {
-					ecmaVersion: 2022,
-					sourceType: 'module',
-					sourceFile: full_path,
-				});
-
-				const state = {
-					imports_exports: new Map<string, Set<[number, number]>>(),
-				};
-
-				walk(ast as Node, state, {
-					_(node, { state, next }) {
-						const node_types: (typeof node)['type'][] = [
-							'ImportExpression',
-							'ImportDeclaration',
-							'ExportNamedDeclaration',
-							'ExportAllDeclaration',
-							'ExportDefaultDeclaration',
-						];
-
-						if (!node_types.includes(node.type)) {
-							return next(state);
-						}
-
-						if ('source' in node && node.source != null && 'value' in node.source) {
-							const typed_node_source = node.source as Literal;
-							if (state.imports_exports.has(typed_node_source.value + '')) {
-								state.imports_exports
-									.get(typed_node_source.value + '')
-									?.add([typed_node_source.start, typed_node_source.end]);
-							} else {
-								state.imports_exports.set(typed_node_source.value + '', new Set());
-								state.imports_exports
-									.get(typed_node_source.value + '')
-									?.add([typed_node_source.start, typed_node_source.end]);
-							}
-						}
-
-						next(state);
-					},
-				});
-
-				const ms = new MagicString(output);
-
-				for (const [import_path, locs] of state.imports_exports) {
-					let final_path = path.join('/npm/', import_path);
-					if (import_path.startsWith('.')) {
-						// console.log('Relative import:', import_path);
-						// Resolve with pathname
-						const resolved = new URL(import_path, config.url);
-						if (config.flags.svelte) {
-							resolved.searchParams.set('svelte', config.flags.svelte);
-						}
-
-						final_path = (await stringify_url_from_config(await resolve_config_from_url(resolved)))
-							.pathname;
-						// console.log({ final_path });
-					} else {
-						// We also need to point the dependency to the version in the package.json of the current package
-						config.package_json.dependencies ??= {};
-						config.package_json.devDependencies ??= {};
-						config.package_json.peerDependencies ??= {};
-
-						const [name] = /(?:@[^/]+\/)?[^/]+/.exec(import_path) ?? [];
-						if (!name) throw new Error('Could not extract name from import path ' + import_path);
-
-						let version =
-							config.package_json.dependencies[name] ??
-							config.package_json.devDependencies[name] ??
-							config.package_json.peerDependencies[name] ??
-							'latest';
-
-						if (config.flags.svelte && name === 'svelte') {
-							version = config.flags.svelte;
-						}
-
-						if (import_path.includes('svelte/internal')) console.log('bleh', import_path, locs);
-
-						const { version: resolved_version } = await pacote.manifest(`${name}@${version}`);
-						const package_json = await fetch_package_info(name, resolved_version);
-
-						final_path = String(
-							await resolve_from_pkg(
-								package_json,
-								final_path.replace(`/npm/${name}`, '').replace(/^\//, ''),
-								path.join(config.folder, 'node_modules', name)
-							)
-						);
-
-						final_path = path.join('/npm/', name + '@' + resolved_version, final_path);
-
-						const folder = `${PACKAGES_ROOT}/${name}@${resolved_version}`;
-
-						try {
-							await mkdir(folder, { recursive: true });
-						} catch {}
-
-						await Bun.write(
-							Bun.file(`${folder}/package.json`),
-							JSON.stringify({ dependencies: { [name]: version } }, null, 2)
-						);
-
-						await $`cd ${folder} && pnpm install --prefer-offline --ignore-scripts`;
-
-						// console.log(new URL(final_path, config.url.origin));
-						final_path = (
-							await stringify_url_from_config(
-								await resolve_config_from_url(new URL(final_path, config.url.origin))
-							)
-						).pathname;
-						// console.log(final_path);}
-					}
-
-					for (const [start, end] of locs) {
-						ms.overwrite(start, end, `'${final_path}'`);
-					}
-				}
-
-				output = ms.toString();
-
-				if (output.includes('svelte/internal')) console.log('bleh', state);
-			} catch (e) {
-				console.trace(e);
-			}
-
-			if (!full_path.endsWith('.min.js'))
-				output = await format(output, { filepath: 'x.js', useTabs: true, singleQuote: true });
-		}
-		cache.set(resolved_url.pathname, output);
-
-		set.headers['Content-Type'] = 'application/javascript';
-		set.headers['Content-Encoding'] = 'gzip';
-		// set.headers['Cache-Control'] = 'public, max-age=31536000, immutable';
-
-		return Bun.gzipSync(output);
+	.get('/*', async ({ request }) => {
+		return await compile_url(request);
 	});
 // .listen(1234, ({ port }) => console.log('Listening on http://localhost:' + port));
 

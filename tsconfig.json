@@ -3,7 +3,6 @@
 		"moduleResolution": "Bundler",
 		"module": "ESNext",
 		"target": "ESNext",
-		"types": ["bun-types"],
 		"verbatimModuleSyntax": true,
 		"strict": true
 	},
