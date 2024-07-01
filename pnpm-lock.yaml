@@ -26,9 +26,6 @@ importers:
       pacote:
         specifier: ^18.0.6
         version: 18.0.6
-      prettier:
-        specifier: ^3.3.1
-        version: 3.3.1
       resolve.exports:
         specifier: ^2.0.2
         version: 2.0.2
@@ -1009,11 +1006,6 @@ packages:
         optional: true
       ts-node:
         optional: true
-
-  prettier@3.3.1:
-    resolution: {integrity: sha512-7CAwy5dRsxs8PHXT3twixW9/OEll8MLE0VRPCJyl7CkS6VHGPSlsVaWTiASPTyGyYRyApxlaWTzwUxVNrhcwDg==}
-    engines: {node: '>=14'}
-    hasBin: true
 
   proc-log@3.0.0:
     resolution: {integrity: sha512-++Vn7NS4Xf9NacaU9Xq3URUuqZETPsf8L4j5/ckhaRYsfPeRyzGw+iDjFhV/Jr3uNmTvvddEJFWh5R1gRgUH8A==}
@@ -2220,8 +2212,6 @@ snapshots:
     dependencies:
       lilconfig: 3.1.1
       yaml: 2.4.3
-
-  prettier@3.3.1: {}
 
   proc-log@3.0.0: {}
 

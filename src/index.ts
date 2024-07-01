@@ -8,7 +8,6 @@ import MagicString from 'magic-string';
 import { mkdir, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import * as pacote from 'pacote';
-import { format } from 'prettier';
 import * as resolve from 'resolve.exports';
 import type { PackageJson } from 'type-fest';
 import { walk } from 'zimmerframe';
@@ -496,9 +495,6 @@ async function compile_url(request: Request, follow_up = false): Promise<Respons
 		} catch (e) {
 			console.trace(e);
 		}
-
-		if (!full_path.endsWith('.min.js'))
-			output = await format(output, { filepath: 'x.js', useTabs: true, singleQuote: true });
 	}
 
 	cache.set(resolved_url.pathname, output);
