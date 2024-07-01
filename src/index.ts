@@ -2,7 +2,7 @@ import { cors } from '@elysiajs/cors';
 import { parse, type Literal } from 'acorn';
 import { $ } from 'bun';
 import { Database } from 'bun:sqlite';
-import { Elysia, redirect } from 'elysia';
+import { Elysia } from 'elysia';
 import { type Node } from 'estree-walker';
 import MagicString from 'magic-string';
 import { mkdir, readdir, stat } from 'node:fs/promises';
@@ -115,9 +115,10 @@ async function fetch_package_info(name: string, version?: string) {
 }
 
 const URL_REGEX =
-	/^(\/?(?<registry>npm|github)\/)?(?<name>(?:@[\w-]+\/)?[\w-]+)(?:@(?<version>[\w.-]+))?(\/?(?<extra>[\w./-]+)?)$/;
+	/^(\/?(?<registry>npm|github)\/)?(?<name>(?:@[\w-]+\/)?[\w.-]+)(?:@(?<version>[\w.-]+))?(\/?(?<extra>[\w./-]+)?)$/;
+
 const PROCESSED_URL_REGEX =
-	/^\/(?<registry>npm|github)\/(?<name>(?:@[\w-]+\/)?[\w-]+)@(?<version>\d+\.\d+\.\d+(?:-[\w.-]+)?)\/(?<extra>[\w./-]+)!!cdnv:.*$/;
+	/^\/(?<registry>npm|github)\/(?<name>(?:@[\w-]+\/)?[\w.-]+)@(?<version>\d+\.\d+\.\d+(?:-[\w.-]+)?)\/(?<extra>[\w./-]+)!!cdnv:.*$/;
 
 const BUILD_VERSION = 'pre.1';
 
@@ -268,7 +269,7 @@ async function resolve_from_pkg(pkg: PackageJson, subpath: string, pkg_url_base:
 				}) || [];
 
 			return resolved;
-		} catch {
+		} catch (e) {
 			// throw `no matched export path was found in "${pkg_name}/package.json"`;
 		}
 	}
@@ -342,18 +343,18 @@ async function compile_url(request: Request, follow_up = false): Promise<Respons
 
 	const hit = cache.get(resolved_url.pathname);
 
-	if (hit) {
-		console.info('CACHE HIT:', resolved_url.pathname);
-		current_urls.delete(resolved_url.href);
+	// if (hit) {
+	// 	console.info('CACHE HIT:', resolved_url.pathname);
+	// 	current_urls.delete(resolved_url.href);
 
-		return new Response(Bun.gzipSync(hit), {
-			headers: {
-				'Content-Type': 'application/javascript',
-				'Content-Encoding': 'gzip',
-				// 'Cache-Control': 'public, max-age=31536000, immutable',
-			},
-		});
-	}
+	// 	return new Response(Bun.gzipSync(hit), {
+	// 		headers: {
+	// 			'Content-Type': 'application/javascript',
+	// 			'Content-Encoding': 'gzip',
+	// 			// 'Cache-Control': 'public, max-age=31536000, immutable',
+	// 		},
+	// 	});
+	// }
 
 	await installer.add(config.name, config.version, true);
 
