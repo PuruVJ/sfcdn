@@ -1,4 +1,5 @@
 import { $ } from 'bun';
+import { stat } from 'fs/promises';
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import { build } from 'tsup';
 
@@ -18,11 +19,9 @@ const versions = Object.keys(data.versions)
 	.filter((v) => compare_to_version(v, 3, 0, 0) >= 0)
 	.filter((v) => !/(alpha|beta)/.test(v));
 
-const pnpm_files = {
-	'.npmrc': 'auto-install-peers=true',
-	'package.json': JSON.stringify({ name: 'anything' }),
-	'pnpm-workspace.yaml': `packages:
-  - 'svelte/*'`,
+const package_files = {
+	// '.npmrc': 'auto-install-peers=true',
+	'package.json': JSON.stringify({ name: 'anything', workspaces: ['svelte/*'] }),
 };
 const root = 'src/scripts/localcache';
 const folder = `${root}/svelte`;
@@ -31,7 +30,9 @@ if (true) {
 		for (const v of versions) {
 			await mkdir(folder + '/' + v, { recursive: true });
 			// Write package.json with svelte version as dependency
-			await $`echo '{ "dependencies": { "svelte": "${v}" } }' > ${folder + '/' + v}/package.json`;
+			await $`echo '{ "name": "svelte-${v}", "dependencies": { "svelte": "${v}" } ${
+				v.startsWith('3.29') ? ', "css-tree": "1.0.0-alpha22"' : ''
+			} }' > ${folder + '/' + v}/package.json`;
 			// Write an index.js file which export compile function from svelte/compiler
 			await $`echo ${
 				v.startsWith('4')
@@ -41,51 +42,59 @@ if (true) {
 		}
 	} catch {}
 
-	await $`cd ${root} && echo ${pnpm_files['.npmrc']} > .npmrc`;
-	await $`cd ${root} && echo '${pnpm_files['package.json']}' > package.json`;
-	await $`cd ${root} && echo '${pnpm_files['pnpm-workspace.yaml']}' > pnpm-workspace.yaml`;
+	// await $`cd ${root} && echo ${package_files['.npmrc']} > .npmrc`;
+	await $`cd ${root} && echo '${package_files['package.json']}' > package.json`;
 
-	for (const version of versions) {
-		await $`echo "Copying ${version}" && cd ${
-			folder + '/' + version
-		} && pnpm install svelte@${version} acorn magic-string`;
-	}
-	await $`cd ${root} && pnpm install`;
+	await $`cd ${root} && bun install`;
 }
 
+const CACHE = true;
+
 if (true) {
-	const failed: string[] = [];
-	const sizes: Record<string, string> = {};
+	const failed: Set<String> = new Set();
+	const sizes: Map<string, number> = new Map();
 	for (const version of versions.sort()) {
-		try {
-			await build({
-				entry: [folder + '/' + version + '/index.js'],
-				format: 'esm',
-				outDir: folder + '/' + version,
-				treeshake: 'smallest',
-				pure: ['compile'],
-				bundle: true,
-				noExternal: ['svelte/compiler'],
-			});
-			sizes[version] =
-				(
-					(await readFile(folder + '/' + version + '/index.mjs', 'utf-8').then(
-						(content) => content.length
-					)) / 1024
-				).toFixed(2) + 'kb';
-		} catch (e) {
-			failed.push(version);
+		let should_build = true;
+		if (CACHE) {
+			try {
+				await stat(folder + '/' + version + '/index.mjs');
+				should_build = false;
+			} catch {}
 		}
+
+		if (should_build) {
+			try {
+				await build({
+					entry: [folder + '/' + version + '/index.js'],
+					format: 'esm',
+					outDir: folder + '/' + version,
+					treeshake: 'smallest',
+					pure: ['compile'],
+					bundle: true,
+					noExternal: ['svelte/compiler'],
+				});
+			} catch (e) {
+				failed.add(version);
+			}
+		}
+
+		try {
+			sizes.set(
+				version,
+				Math.floor(
+					((await readFile(folder + '/' + version + '/index.mjs', 'utf-8').then(
+						(content) => content.length
+					)) /
+						1024) *
+						100
+				) / 100
+			);
+		} catch {}
 	}
 
 	console.log(sizes);
 	console.log('Failed to build:', failed);
 }
-
-// Write a file which imports from index.js within each folder, makes an object with {version: compile} and exports the object
-// await $`echo 'export default {${versions
-//   .map((v) => `"${v}": require("./${v}/index.js").compile`)
-//   .join(',\n')}};' > ${folder}/index.js`;
 
 const content =
 	'export default new Map([\n' +
