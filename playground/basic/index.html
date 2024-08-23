@@ -1,17 +1,24 @@
 <div></div>
 
 <script type="module">
-	// import { mount } from 'https://localhost:1234/npm/svelte@next';
-	// import { codemirror } from 'https://localhost:1234/npm/@neocodemirror/svelte';
+	// import { mount } from 'http://localhost:1234/npm/svelte@next';
+	// import { ConfettiExplosion } from 'http://localhost:1234/npm/svelte-confetti-explosion?svelte=next';
 
-	import { Avatar } from 'https://localhost:1234/npm/radix-svelte';
+	// console.log(mount, ConfettiExplosion);
 
-	new Avatar({ target: document.querySelector('div') });
-
-	// // const res = mount(ConfettiExplosion, { target: document.querySelector('div') });
-	// const res = new ConfettiExplosion({ target: document.querySelector('div') });
+	// const res = mount(ConfettiExplosion, { anchor: document.querySelector('div') });
+	// // const res = new ConfettiExplosion({ target: document.querySelector('div') });
 
 	// console.log(res);
 
-	codemirror();
+	// // codemirror();
+
+	import { createDialog, melt } from 'http://localhost:1234/npm/@melt-ui/svelte?svelte=next';
+
+	const {
+		elements: { trigger, portalled, overlay, content, title, description, close },
+		states: { open },
+	} = createDialog();
+
+	console.log(trigger, portalled, overlay, content, title, description, close, open);
 </script>

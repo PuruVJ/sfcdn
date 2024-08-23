@@ -44,16 +44,13 @@ class InstallQueue {
 	async add(package_name: string, version: string, instant = false) {
 		// Add to the queue
 
-		console.log({ instant });
 		await this.#preinstall(package_name, version, instant);
 
-		const start_time = Date.now();
+		// const start_time = Date.now();
 		if (!instant) {
 			this.#queue.push(`${package_name}@${version}`);
 			this.#flush();
 		}
-
-		console.log('Took', Date.now() - start_time, 'ms to install', package_name, version);
 	}
 
 	async #preinstall(package_name: string, version: string, instant: boolean) {
@@ -237,7 +234,10 @@ async function stringify_url_from_config(
 		temp.searchParams.delete(flag);
 	}
 
-	temp.pathname = `/${config.registry}/${path.join(config.name + '@' + config.version, config.subpath)}${temp.search}`;
+	temp.pathname = `/${config.registry}/${path.join(
+		config.name + '@' + config.version,
+		config.subpath
+	)}${temp.search}`;
 
 	const flag_str_arr = [];
 	// Sorted in order of the reserved flags
@@ -298,7 +298,6 @@ async function resolve_from_pkg(pkg: PackageJson, subpath: string, pkg_url_base:
 		const joined = path.join(pkg_url_base, subpath) + index_file;
 		try {
 			const indexUrl = joined;
-
 			const info = await stat(indexUrl);
 			if (info.isDirectory()) throw new Error('Is a directory');
 
@@ -317,6 +316,8 @@ async function resolve_from_pkg(pkg: PackageJson, subpath: string, pkg_url_base:
 }
 
 const current_urls = new Set<string>();
+
+let CACHE = true;
 
 async function compile_url(request: Request, follow_up = false): Promise<Response> {
 	if (current_urls.has(request.url) && follow_up) {
@@ -342,18 +343,19 @@ async function compile_url(request: Request, follow_up = false): Promise<Respons
 
 	const hit = cache.get(resolved_url.pathname);
 
-	// if (hit) {
-	// 	console.info('CACHE HIT:', resolved_url.pathname);
-	// 	current_urls.delete(resolved_url.href);
+	if (CACHE)
+		if (hit) {
+			console.info('CACHE HIT:', resolved_url.pathname);
+			current_urls.delete(resolved_url.href);
 
-	// 	return new Response(Bun.gzipSync(hit), {
-	// 		headers: {
-	// 			'Content-Type': 'application/javascript',
-	// 			'Content-Encoding': 'gzip',
-	// 			// 'Cache-Control': 'public, max-age=31536000, immutable',
-	// 		},
-	// 	});
-	// }
+			return new Response(Bun.gzipSync(hit), {
+				headers: {
+					'Content-Type': 'application/javascript',
+					'Content-Encoding': 'gzip',
+					// 'Cache-Control': 'public, max-age=31536000, immutable',
+				},
+			});
+		}
 
 	await installer.add(config.name, config.version, true);
 
@@ -382,6 +384,7 @@ async function compile_url(request: Request, follow_up = false): Promise<Respons
 		}
 	}
 
+	let urls_to_fetch = new Set<string>();
 	if (!full_path.endsWith('.d.ts')) {
 		try {
 			const ast = parse(output, {
@@ -455,8 +458,6 @@ async function compile_url(request: Request, follow_up = false): Promise<Respons
 						version = config.flags.svelte;
 					}
 
-					if (import_path.includes('svelte/internal')) console.log('bleh', import_path, locs);
-
 					const { version: resolved_version } = await pacote.manifest(`${name}@${version}`);
 					const package_json = await fetch_package_info(name, resolved_version);
 
@@ -481,7 +482,8 @@ async function compile_url(request: Request, follow_up = false): Promise<Respons
 				}
 
 				// Fire off the request to process subsequent imports and exports too
-				compile_url(new Request(new URL(final_path, config.url.origin)), true);
+				urls_to_fetch.add(new URL(final_path, config.url.origin).href);
+				// compile_url(new Request(new URL(final_path, config.url.origin)), true);
 				// console.log('Following ', new URL(final_path, config.url.origin).href);
 
 				for (const [start, end] of locs) {
@@ -490,8 +492,6 @@ async function compile_url(request: Request, follow_up = false): Promise<Respons
 			}
 
 			output = ms.toString();
-
-			if (output.includes('svelte/internal')) console.log('bleh', imports_exports);
 		} catch (e) {
 			console.trace(e);
 		}
@@ -499,6 +499,10 @@ async function compile_url(request: Request, follow_up = false): Promise<Respons
 
 	cache.set(resolved_url.pathname, output);
 	current_urls.delete(resolved_url.href);
+
+	for (const url of urls_to_fetch) {
+		compile_url(new Request(url), true);
+	}
 
 	return new Response(Bun.gzipSync(output), {
 		headers: {
@@ -513,8 +517,8 @@ const app = new Elysia()
 	.use(cors())
 	.get('/', ({}) => 'Hello')
 	.get('/favicon.ico', ({ set }) => (set.status = 204))
-	.get('/*', async ({ request }) => {
-		return await compile_url(request);
+	.get('/*', ({ request }) => {
+		return compile_url(request);
 	});
 // .listen(1234, ({ port }) => console.log('Listening on http://localhost:' + port));
 
