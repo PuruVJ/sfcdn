@@ -38,22 +38,7 @@ class Cache {
 const cache = new Cache();
 
 class InstallQueue {
-	#queue: string[] = [];
-	#flushing = false;
-
 	async add(package_name: string, version: string, instant = false) {
-		// Add to the queue
-
-		await this.#preinstall(package_name, version, instant);
-
-		// const start_time = Date.now();
-		if (!instant) {
-			this.#queue.push(`${package_name}@${version}`);
-			this.#flush();
-		}
-	}
-
-	async #preinstall(package_name: string, version: string, instant: boolean) {
 		const proj_id = `${package_name}@${version}`;
 		const folder = `${PACKAGES_ROOT}/${proj_id}`;
 
@@ -62,7 +47,7 @@ class InstallQueue {
 		} catch {}
 
 		const folder_contents = await readdir(folder);
-		if (folder_contents.includes('pnpm-lock.yaml')) {
+		if (folder_contents.includes('bun.lockb')) {
 			return;
 		}
 
@@ -71,32 +56,7 @@ class InstallQueue {
 			JSON.stringify({ dependencies: { [package_name]: version } }, null, 2)
 		);
 
-		if (!instant) return;
-
-		await $`cd packages/${proj_id} && pnpm install --ignore-scripts`;
-	}
-
-	async #flush() {
-		if (this.#flushing) return;
-
-		// Start going through the queue, run pnpm install for each. Also ensure queue being changed is also detected
-		this.#flushing = true;
-
-		const queue = this.#queue;
-		this.#queue = [];
-
-		for (const pkg of queue) {
-			const folder_contents = await readdir(`${PACKAGES_ROOT}/${pkg}`);
-			if (folder_contents.includes('pnpm-lock.yaml')) continue;
-
-			await $`cd packages/${pkg} && pnpm install --prefer-offline --ignore-scripts`;
-		}
-
-		this.#flushing = false;
-
-		if (this.#queue.length) {
-			await this.#flush();
-		}
+		await $`cd packages/${proj_id} && bun install --ignore-scripts --production`;
 	}
 }
 
